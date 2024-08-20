@@ -68,15 +68,15 @@ class Rigidbody
 	float rmass; // reciprocal of the mass
 	Vector position;
 	Vector velocity;
-	Vector velocityChanges;
 	Vector accelerations;
+	Vector velocityChanges;
 
 public:
 	Rigidbody(float mass, const Vector &position, const Vector& u)
 	{
 		this->rmass = 1.f / mass;
 		this->position = position;
-		this->velocity = u;
+		this->velocityChanges = u;
 	}
 
 	void AddImpulse(const Vector& force)
@@ -104,13 +104,38 @@ public:
 		return velocity;
 	}
 
-	void Update(float dt)
+	void EulerCromerUpdate(float dt)
 	{
-		velocity += velocityChanges;
+		// update accelerations
 		velocity += accelerations * dt;
-		position += velocity * dt;
-		velocityChanges = Vector();
 		accelerations = Vector();
+
+		// update impulses
+		velocity += velocityChanges;
+		velocityChanges = Vector();
+
+		// update position
+		position += velocity * dt;
+	}
+
+	void LeapfrogUpdate(float dt)
+	{
+		velocity += 0.5f * accelerations * dt + velocityChanges;
+		velocityChanges = Vector();
+
+		position += velocity * dt;
+
+		velocity += 0.5f * accelerations * dt;
+		accelerations = Vector();
+	}
+
+	void FakeCollision()
+	{
+		if (Height() < 0.0f)
+		{
+			position = Vector();
+			velocity = Vector();
+		}
 	}
 };
 
@@ -142,7 +167,7 @@ public:
 		ball->AddImpulse(v);
 	}
 
-	float SimulateToFindPeak(float& Me)
+	float SimulateToFindPeak(bool leapfrog, float& Me)
 	{
 		float h = 0.0f;
 		float peak = 0.0f;
@@ -151,7 +176,14 @@ public:
 		do
 		{
 			ball->AddForce(gravity * ball->Mass());
-			ball->Update(dt);
+			if (leapfrog)
+			{
+				ball->LeapfrogUpdate(dt);
+			}
+			else
+			{
+				ball->EulerCromerUpdate(dt);
+			}
 			h = ball->Height() - baseline;
 			v = ball->Velocity();
 			peak = std::max(h, peak);
@@ -167,7 +199,7 @@ public:
 };
 
 
-void Experiment(bool correction, bool impulse)
+void Experiment(bool leapfrog, bool impulse)
 {
 	float tennisBallRadius = 0.068f; // 6.8cm
 	float tennisBallMass = 0.057f; // 57g
@@ -180,43 +212,34 @@ void Experiment(bool correction, bool impulse)
 	float Me = test.MechanicalEnergy(u, 0.0f, tennisBallMass);
 	std::cout.precision(2);
 
-	Vector Eu;
-	if (correction)
-	{
-		// calculate the required adjustment to the velocity to get it
-		// to what it would have needed to be, half a time step ago,
-		// so that it is correct velocity when applied by updateForces()
-		Eu = -0.5f * gravity * dt;
-	}
-
 	if (impulse)
 	{
 		test.CreateBall(tennisBallRadius, tennisBallMass, Vector());
-		test.HitBall((u + Eu) * tennisBallMass);
-		std::cout << "Impulse energy is " << test.MechanicalEnergy(u, 0.0f, tennisBallMass) << " J" << std::endl;
+		test.HitBall(u * tennisBallMass);
+		std::cout << "Impulse energy is " << Me << " J" << std::endl;
 	}
 	else
 	{
-		std::cout << "Initial energy is " << test.MechanicalEnergy(u, 0.0f, tennisBallMass) << " J" << std::endl;
-		test.CreateBall(tennisBallRadius, tennisBallMass, u + Eu);
+		std::cout << "Initial energy is " << Me << " J" << std::endl;
+		test.CreateBall(tennisBallRadius, tennisBallMass, u);
 	}
 
-	float peak = test.SimulateToFindPeak(Me);
+	float peak = test.SimulateToFindPeak(leapfrog, Me);
 	std::cout << "Ball mechanical energy " << Me << " J at peak height of " << peak << " m" << std::endl;
 	std::cout << std::endl;
 }
 
 int main()
 {
-	bool correction = true;
 	bool impulse = true;
-	std::cout << "Test with initial velocity..." << std::endl;
-	Experiment(!correction, !impulse);
-	std::cout << "Test with impulse..." << std::endl;
-	Experiment(!correction, impulse);
-	std::cout << "Apply correction to initial velocity..." << std::endl;
-	Experiment(correction, !impulse);
-	std::cout << "Apply correction to impulse..." << std::endl;
-	Experiment(correction, impulse);
+	bool leapfrog = true;
+	std::cout << "Test Euler-Cromer with initial velocity..." << std::endl;
+	Experiment(!leapfrog, !impulse);
+	std::cout << "Test Euler-Cromer with impulse..." << std::endl;
+	Experiment(!leapfrog, impulse);
+	std::cout << "Test Leapfrog with initial velocity..." << std::endl;
+	Experiment(leapfrog, !impulse);
+	std::cout << "Test Leapfrog with impulse..." << std::endl;
+	Experiment(leapfrog, impulse);
 	return 0;
 }
