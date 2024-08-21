@@ -1,4 +1,4 @@
-# Simplectic Integrator
+# Symplectic Integrator
 
 This project contains (a stripped down) symplectic Euler-Cromer integrator used in PhysX. The core feature of this integrator is that it updates velocity values before updating the position value.
 
