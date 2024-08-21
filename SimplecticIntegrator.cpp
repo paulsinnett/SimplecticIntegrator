@@ -176,11 +176,11 @@ public:
 		// update position
 		position += internalVelocity * dt;
 
+		// update velocity (for reporting the current velocity at this time step)
+		velocity = internalVelocity + 0.5f * accelerations * dt;
+
 		// update accelerations
 		internalVelocity += accelerations * dt;
-
-		// update velocity (for reporting the current velocity at this time step)
-		velocity = internalVelocity - 0.5f * accelerations * dt;
 
 		// clear stored impulses and accelerations
 		accelerations = Vector();
