@@ -2,6 +2,7 @@
 //
 
 #include <iostream>
+#include <vector>
 
 struct Vector
 {
@@ -91,8 +92,6 @@ class Rigidbody
 	Vector accelerations;
 	Vector velocityChanges;
 	UpdateMethod method;
-	bool asleep = true;
-	bool wake = true;
 
 public:
 	Rigidbody(float mass, const Vector &position, const Vector& u, UpdateMethod method): method(method)
@@ -101,11 +100,6 @@ public:
 		this->position = position;
 		this->internalVelocity = u;
 		this->velocity = u;
-	}
-
-	void WakeUp()
-	{
-		wake = true;
 	}
 
 	void AddImpulse(const Vector& force)
@@ -138,6 +132,14 @@ public:
 		return velocity;
 	}
 
+	void OnWake(float dt)
+	{
+		if (method == Leapfrog)
+		{
+			internalVelocity -= 0.5f * accelerations * dt;
+		}
+	}
+
 	void Update(float dt)
 	{
 		switch (method)
@@ -146,10 +148,8 @@ public:
 			EulerUpdate(dt);
 			break;
 		case EulerCromer:
-			EulerCromerUpdate(dt);
-			break;
 		case Leapfrog:
-			LeapfrogUpdate(dt);
+			EulerCromerUpdate(dt);
 			break;
 		}
 		FakeCollision();
@@ -157,19 +157,6 @@ public:
 
 	void EulerUpdate(float dt)
 	{
-		if (asleep)
-		{
-			if (wake)
-			{
-				asleep = false;
-				wake = false;
-			}
-			else
-			{
-				return;
-			}
-		}
-
 		// update impulses
 		internalVelocity += velocityChanges;
 
@@ -189,61 +176,12 @@ public:
 
 	void EulerCromerUpdate(float dt)
 	{
-		if (asleep)
-		{
-			if (wake)
-			{
-				asleep = false;
-				wake = false;
-			}
-			else
-			{
-				return;
-			}
-		}
-
-
 		// update impulses
 		internalVelocity += velocityChanges;
 
 		// update accelerations
 		internalVelocity += accelerations * dt;
 
-		// update velocity (for reporting the current velocity at this time step)
-		velocity = internalVelocity + 0.5f * accelerations * dt;
-
-		// update position
-		position += internalVelocity * dt;
-
-		// clear stored impulses and accelerations
-		velocityChanges = Vector();
-		accelerations = Vector();
-	}
-
-	void LeapfrogUpdate(float dt)
-	{
-		float vstep = 0.5f;
-		if (asleep)
-		{
-			if (wake)
-			{
-				asleep = false;
-				wake = false;
-				vstep = 0.f;
-			}
-			else
-			{
-				return;
-			}
-		}
-
-		// update impulses
-		internalVelocity += velocityChanges;
-
-		// update accelerations
-		internalVelocity += vstep * accelerations * dt;
-		internalVelocity += 0.5f * accelerations * dt;
-		
 		// update velocity (for reporting the current velocity at this time step)
 		velocity = internalVelocity + 0.5f * accelerations * dt;
 
@@ -262,21 +200,20 @@ public:
 			position = Vector();
 			internalVelocity = Vector();
 			velocity = Vector();
-			asleep = true;
 		}
 	}
 };
 
 class PhysicsTest
 {
-	Rigidbody* ball = NULL;
-	Rigidbody* Earth = NULL;
-	Rigidbody* Sun = NULL;
+	std::vector<Rigidbody*> bodies;
+	std::vector<Rigidbody*> wakeup;
 	Vector gravity;
-	float dt;
 	UpdateMethod method;
 
 public:
+	float dt;
+
 	PhysicsTest(float dt, const Vector& gravity, UpdateMethod method) : dt(dt), gravity(gravity), method(method)
 	{
 	}
@@ -288,71 +225,81 @@ public:
 		return Pe + Ke;
 	}
 
-	void CreateBall(float radius, float mass, Vector u)
+	void AddBody(Rigidbody* body)
 	{
-		ball = new Rigidbody(mass, Vector(0, radius, 0), u, method);
+		wakeup.push_back(body);
 	}
 
-	void CreateBodies()
+	void Update()
 	{
-		// mass in solar masses
-		// velocities in AU / year
-		Earth = new Rigidbody(3.003353e-06f, Vector(0.9832924f, 0, 0), Vector(0, 0, 6.38966f), method);
-		// The sun gets an initial velocity to counter the Earth's initial velocity
-		Sun = new Rigidbody(1.f, Vector(0, 0, 0), Vector(0, 0, -1.91904e-5f), method);
-	}
-
-	void HitBall(Vector v)
-	{
-		ball->AddImpulse(v);
-	}
-
-	float SimulateToFindPeak(float& Me)
-	{
-		float h = 0.0f;
-		float peak = 0.0f;
-		float baseline = ball->Height();
-		Vector v;
-		do
+		for (Rigidbody* body : bodies)
 		{
-			ball->AddForce(gravity * ball->Mass());
-			ball->Update(dt);
-			h = ball->Height() - baseline;
-			v = ball->Velocity();
-			peak = std::max(h, peak);
-			Me = MechanicalEnergy(v, peak, ball->Mass());
-		} while (v.Y() > 0.0f);
-		Me = MechanicalEnergy(v, peak, ball->Mass());
-		return peak;
-	}
-
-	float MeasureAphelionDrift(float orbits)
-	{
-		float aphelion = Earth->VectorTo(*Sun).Magnitude();
-		do
-		{
-			// G in AU^3 / (SolarMasses * year^2)
-			float G = 39.478716f;
-			float F = G * Sun->Mass() * Earth->Mass() / Earth->VectorTo(*Sun).Squared();
-			Earth->AddForce(F * Earth->VectorTo(*Sun));
-			Sun->AddForce(F * Sun->VectorTo(*Earth));
-			Earth->Update(dt);
-			Sun->Update(dt);
-			orbits -= dt;
-			aphelion = std::max(aphelion, Earth->VectorTo(*Sun).Magnitude());
+			body->AddForce(gravity * body->Mass());
 		}
-		while (orbits > 0);
 
-		return aphelion;
+		for (Rigidbody* body : wakeup)
+		{
+			body->AddForce(gravity * body->Mass());
+			body->OnWake(dt);
+			bodies.push_back(body);
+		}
+		wakeup.clear();
+
+		for (Rigidbody* body : bodies)
+		{
+			body->Update(dt);
+		}
 	}
 
 	~PhysicsTest()
 	{
-		delete ball;
-		delete Earth;
-		delete Sun;
+		for (Rigidbody* body : wakeup)
+		{
+			delete body;
+		}
+
+		for (Rigidbody* body : bodies)
+		{
+			delete body;
+		}
 	}
 };
+
+float SimulateToFindPeak(Rigidbody* ball, PhysicsTest& test, float& Me)
+{
+	float h = 0.0f;
+	float peak = 0.0f;
+	float baseline = ball->Height();
+	Vector v;
+	do
+	{
+		test.Update();
+		h = ball->Height() - baseline;
+		v = ball->Velocity();
+		peak = std::max(h, peak);
+		Me = test.MechanicalEnergy(v, peak, ball->Mass());
+	} while (v.Y() > 0.0f);
+	Me = test.MechanicalEnergy(v, peak, ball->Mass());
+	return peak;
+}
+
+float MeasureAphelionDrift(Rigidbody* Earth, Rigidbody* Sun, PhysicsTest& test, float orbits)
+{
+	float aphelion = Earth->VectorTo(*Sun).Magnitude();
+	do
+	{
+		// G in AU^3 / (SolarMasses * year^2)
+		float G = 39.478716f;
+		float F = G * Sun->Mass() * Earth->Mass() / Earth->VectorTo(*Sun).Squared();
+		Earth->AddForce(F * Earth->VectorTo(*Sun));
+		Sun->AddForce(F * Sun->VectorTo(*Earth));
+		test.Update();
+		orbits -= test.dt;
+		aphelion = std::max(aphelion, Earth->VectorTo(*Sun).Magnitude());
+	} while (orbits > 0);
+
+	return aphelion;
+}
 
 const char* MethodName(UpdateMethod method)
 {
@@ -383,9 +330,10 @@ void InitialVelocityJumpHeightExperiment(UpdateMethod method)
 	std::cout.precision(2);
 
 	std::cout << "Initial energy is " << Me << " J" << std::endl;
-	test.CreateBall(tennisBallRadius, tennisBallMass, u);
+	Rigidbody* ball = new Rigidbody(tennisBallMass, Vector(0, tennisBallRadius, 0), u, method);
+	test.AddBody(ball);
 
-	float peak = test.SimulateToFindPeak(Me);
+	float peak = SimulateToFindPeak(ball, test, Me);
 	std::cout << "Ball mechanical energy " << Me << " J at peak height of " << peak << " m" << std::endl;
 	std::cout << std::endl;
 }
@@ -404,11 +352,12 @@ void ImpulseJumpHeightExperiment(UpdateMethod method)
 	float Me = test.MechanicalEnergy(u, 0.0f, tennisBallMass);
 	std::cout.precision(2);
 
-	test.CreateBall(tennisBallRadius, tennisBallMass, Vector());
-	test.HitBall(u * tennisBallMass);
+	Rigidbody* ball = new Rigidbody(tennisBallMass, Vector(0, tennisBallRadius, 0), Vector(), method);
+	test.AddBody(ball);
+	ball->AddImpulse(u * tennisBallMass);
 	std::cout << "Impulse energy is " << Me << " J" << std::endl;
 
-	float peak = test.SimulateToFindPeak(Me);
+	float peak = SimulateToFindPeak(ball, test, Me);
 	std::cout << "Ball mechanical energy " << Me << " J at peak height of " << peak << " m" << std::endl;
 	std::cout << std::endl;
 }
@@ -420,9 +369,16 @@ void OrbitExperiment(UpdateMethod method)
 	int fpy = 50;
 	float dt = 1.f / fpy;
 	PhysicsTest test(dt, Vector(), method);
-	test.CreateBodies();
+	// mass in solar masses
+	// velocities in AU / year
+	Rigidbody* Earth = new Rigidbody(3.003353e-06f, Vector(0.9832924f, 0, 0), Vector(0, 0, 6.38966f), method);
+	test.AddBody(Earth);
+	// The sun gets an initial velocity to counter the Earth's initial velocity
+	Rigidbody* Sun = new Rigidbody(1.f, Vector(0, 0, 0), Vector(0, 0, -1.91904e-5f), method);
+	test.AddBody(Sun);
+
 	int orbits = 100;
-	float aphelionError = std::fabsf(test.MeasureAphelionDrift((float)orbits) - 1.0167f);
+	float aphelionError = std::fabsf(MeasureAphelionDrift(Earth, Sun, test, (float)orbits) - 1.0167f);
 	std::cout << "Aphelion error is " << aphelionError << " AU after " << orbits << " orbits" << std::endl;
 	std::cout << std::endl;
 }
